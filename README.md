@@ -9,7 +9,7 @@ An AI-powered Natural Language to SQL agent that converts plain English question
 - **Database**: SQLite
 - **Backend**: FastAPI
 - **Frontend**: Streamlit
-- **Libraries**: openai, python-dotenv, tabulate, pandas
+- **Libraries**: openai, langchain, langchain-openai, langchain-community, sqlalchemy, python-dotenv, tabulate, pandas, uvicorn
 
 ## Features
 
@@ -40,7 +40,7 @@ projects(id, name, employee_id, status, deadline)
 ```bash
 # 1. Clone the repo
 git clone <your-repo-url>
-cd nl2sql-agent
+cd nlp-sql
 
 # 2. Create virtual environment
 python -m venv venv
@@ -50,8 +50,8 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 4. Configure environment
-cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Create a .env file and add your OpenAI API key:
+echo "OPENAI_API_KEY=your_api_key_here" > .env
 
 # 5. Seed the database
 python run.py --seed
@@ -129,20 +129,21 @@ ORDER BY hire_date;
 ## Project Structure
 
 ```
-nl2sql-agent/
+nlp-sql/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI endpoints
 │   ├── agent.py             # Core LLM agent logic
-│   ├── database.py          # DB connection & execution
+│   ├── db.py                # DB connection & execution
 │   ├── guardrails.py        # Destructive query blocker
 │   └── schema.py            # Schema context for LLM
 ├── ui/
-│   └── streamlit_app.py     # Streamlit chat interface
+│   └── streamlit.py         # Streamlit chat interface
 ├── db/
-│   ├── setup.py             # Schema + seed script
-│   └── company.db           # SQLite database (generated)
-├── .env.example
+│   └── setup.py             # Schema + seed script
+├── instance/
+│   └── database.db          # SQLite database (generated)
+├── .env
 ├── requirements.txt
 ├── run.py                   # Entry point
 └── README.md
