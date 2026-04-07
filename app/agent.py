@@ -28,22 +28,40 @@ sql_prompt=ChatPromptTemplate.from_messages([
     ("system",
     """You are a SQLite expert. Given a user question, generate a syntactically correct SQLite SELECT query.
     Only return the raw SQL query, nothing else. No markdown, no explanation, no backticks.
- 
+
+    If the question is not related to the database or cannot be answered with a SELECT query, respond with exactly:
+    NOT_RELEVANT
+
     Database schema:
 {table_info}
- 
+
     Today's date: {today}
- 
+
     Rules:
     - Only SELECT queries. Never write INSERT, UPDATE, DELETE, DROP, or any data-modifying statement.
     - Use JOINs when multiple tables are needed.
-    - If the question is ambiguous, make a reasonable assumption.
+    - If the question is ambiguous but answerable, make a reasonable assumption.
+    - If the question is too vague to generate any meaningful query, respond with NOT_RELEVANT.
     """),
     MessagesPlaceholder("history", optional=True),
     ("human", "{input}")
 ])
 
 sql_chain=sql_prompt|llm
+
+# SQL Fix/Retry Prompt
+fix_sql_prompt=ChatPromptTemplate.from_messages([
+    ("system",
+    """You are a SQLite expert. A SQL query failed with an error. Fix the query so it runs correctly.
+    Only return the corrected raw SQL query, nothing else. No markdown, no explanation, no backticks.
+
+    Database schema:
+    {table_info}
+    """),
+    ("human", "Original question: {question}\n\nFailed SQL:\n{sql}\n\nError:\n{error}\n\nReturn the corrected SQL only.")
+])
+
+fix_sql_chain=fix_sql_prompt|llm
 
 # Explanation Prompt + Follow-up Questions
 explain_prompt=ChatPromptTemplate.from_messages([
@@ -127,31 +145,54 @@ def ask(question:str,history:list[dict]|None=None)->dict:
             "results": None,"follow_ups": [], "error": f"LLM error: {str(e)}",
         }
 
-    if not sql:
+    if not sql or sql.upper() == "NOT_RELEVANT":
         return {
             "question": question, "sql": "", "explanation": "",
             "results": None, "follow_ups": [],
-            "error": "Could not generate a SQL query for this question.",
+            "error": "I couldn't relate your question to the database. Try asking about employees, departments, salaries, or projects.",
         }
-    
+
     # Step 2: Safety Check
-    is_safe,safety_msg=check_sqlquery(sql)
+    is_safe, safety_msg=check_sqlquery(sql)
     if not is_safe:
         return {
-            "question": question, "sql": "", "explanation": "",
+            "question": question, "sql": sql, "explanation": "",
             "results": None, "follow_ups": [],
             "error": safety_msg,
         }
-    
-    # Step 3: Execute SQL and get results
+
+    # Step 3: Execute SQL — retry once on failure
     try:
         results=execute_query(sql)
     except Exception as e:
-        return {
-            "question": question, "sql": "", "explanation": "",
-            "results": None, "follow_ups": [],
-            "error": f"SQL execution error: {str(e)}",
-        }
+        # Retry: ask LLM to fix the SQL
+        try:
+            schema_info=db.get_table_info()
+            fix_response=fix_sql_chain.invoke({
+                "question": question,
+                "sql": sql,
+                "error": str(e),
+                "table_info": schema_info,
+            })
+            fixed_sql=fix_response.content.strip().strip("`").strip()
+            if fixed_sql.lower().startswith("sql"):
+                fixed_sql=fixed_sql[3:].strip()
+
+            is_safe, safety_msg=check_sqlquery(fixed_sql)
+            if not is_safe:
+                return {
+                    "question": question, "sql": fixed_sql, "explanation": "",
+                    "results": None, "follow_ups": [], "error": safety_msg,
+                }
+
+            results=execute_query(fixed_sql)
+            sql=fixed_sql
+        except Exception as retry_e:
+            return {
+                "question": question, "sql": sql, "explanation": "",
+                "results": None, "follow_ups": [],
+                "error": f"Could not execute the query: {str(retry_e)}. Please try rephrasing your question.",
+            }
     
     # Step 4: Explain the results and generate follow-up questions
     try:
